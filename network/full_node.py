@@ -19,14 +19,14 @@ from block import Block
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.INFO,  # Changed to INFO as base level
     format='%(asctime)s [%(levelname)s] %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
-# Mining difficulty target
-TARGET_BITS = 0x1e200000
-HEX_TARGET = 0x0000200000000000000000000000000000000000000000000000000000000000
+# Mining difficulty target (making it easier to mine blocks)
+TARGET_BITS = 0x2100ffff
+HEX_TARGET = 0x00ffff0000000000000000000000000000000000000000000000000000000000
 
 class FullNodeServicer(blockchain_pb2_grpc.FullNodeServiceServicer):
     def __init__(self, node):
@@ -40,10 +40,10 @@ class FullNodeServicer(blockchain_pb2_grpc.FullNodeServiceServicer):
         node_addr = request.addr_me
         best_height = request.best_height
         
-        logging.info(f"Received handshake from node {node_addr}")
-        logging.info(f"  Version: {version}")
-        logging.info(f"  Time: {time.ctime(node_time)}")
-        logging.info(f"  Best Height: {best_height}")
+        logging.debug(f"Received handshake from node {node_addr}")  # Changed to DEBUG
+        logging.debug(f"  Version: {version}")  # Changed to DEBUG
+        logging.debug(f"  Time: {time.ctime(node_time)}")  # Changed to DEBUG
+        logging.debug(f"  Best Height: {best_height}")  # Changed to DEBUG
         
         # Add the node to our known peers and mark as handshaked
         self.node.add_peer(node_addr, handshaked=True)
@@ -133,21 +133,19 @@ class FullNode:
         # Mining control
         self.mining_event = threading.Event()
         self.mining_thread = None
+        self.mining_block = None  # Current block being mined
+        self.mining_transactions = set()  # Transactions in current mining block
+        self.chain_work = {}  # Track work for each chain tip
+        self.fork_points = {}  # Track potential fork points
+        self.new_transaction_event = threading.Event()  # Signal for new transaction
     
     def generate_random_transaction(self) -> Transaction:
         """Generate a random transaction for testing."""
-        tx = Transaction()
-        # Create a random input
-        input_data = f"tx_{int(time.time())}_{random.randint(0, 1000000)}"
-        tx.add_input(input_data)
-        
-        # Create 1-3 outputs with random values using real addresses
-        num_outputs = random.randint(1, 3)
-        for i in range(num_outputs):
-            value = random.randint(100, 10000)  # 0.1 to 10 Barbaracoins
-            recipient_wallet = Wallet()  # Generate a new wallet for the recipient
-            tx.add_output(value, recipient_wallet.get_address())
-        
+        # Create a coinbase transaction instead of random transactions
+        tx = Transaction.create_coinbase(
+            value=50_000,  # 50 Barbaracoins
+            recipient_script=self.current_wallet.get_address() if hasattr(self, 'current_wallet') else Wallet().get_address()
+        )
         return tx
     
     def broadcast_transaction(self, tx: Transaction, exclude_peer: str = None):
@@ -163,15 +161,23 @@ class FullNode:
         with self.handshake_lock:
             peers_to_broadcast = list(self.handshaked_peers)
         
+        logging.info(f"Broadcasting transaction {tx.transaction_hash[:8]} to {len(peers_to_broadcast)} peers")
+        successful_broadcasts = 0
+        
         # Broadcast to all handshaked peers except the excluded one
         for peer in peers_to_broadcast:
             if peer != exclude_peer:
                 try:
                     with grpc.insecure_channel(f"{peer}:{self.node_port}") as channel:
                         stub = blockchain_pb2_grpc.FullNodeServiceStub(channel)
-                        stub.NewTransactionBroadcast(broadcast_msg)
+                        response = stub.NewTransactionBroadcast(broadcast_msg)
+                        if response.success:
+                            successful_broadcasts += 1
+                            logging.debug(f"Successfully broadcast transaction to {peer}")
                 except grpc.RpcError as e:
                     logging.error(f"Failed to broadcast transaction to {peer}: {e}")
+        
+        logging.info(f"Transaction broadcast complete: {successful_broadcasts}/{len(peers_to_broadcast)} successful")
     
     def broadcast_block(self, block: Block, exclude_peer: str = None):
         """Broadcast block to all known peers."""
@@ -186,63 +192,150 @@ class FullNode:
         with self.handshake_lock:
             peers_to_broadcast = list(self.handshaked_peers)
         
+        logging.info(f"Broadcasting block {block.blockhash[:8]} to {len(peers_to_broadcast)} peers")
+        logging.info(f"Block height: {self.blockchain.current_height}")
+        logging.info(f"Block contains {len(block.transactions)} transactions")
+        successful_broadcasts = 0
+        
         # Broadcast to all handshaked peers except the excluded one
         for peer in peers_to_broadcast:
             if peer != exclude_peer:
                 try:
                     with grpc.insecure_channel(f"{peer}:{self.node_port}") as channel:
                         stub = blockchain_pb2_grpc.FullNodeServiceStub(channel)
-                        stub.NewBlockBroadcast(broadcast_msg)
+                        response = stub.NewBlockBroadcast(broadcast_msg)
+                        if response.success:
+                            successful_broadcasts += 1
+                            logging.debug(f"Successfully broadcast block to {peer}")
                 except grpc.RpcError as e:
                     logging.error(f"Failed to broadcast block to {peer}: {e}")
+        
+        logging.info(f"Block broadcast complete: {successful_broadcasts}/{len(peers_to_broadcast)} successful")
+    
+    def calculate_chain_work(self, block_hash: str) -> int:
+        """Calculate the total work in a chain (number of zeros in block hashes)."""
+        if block_hash not in self.chain_work:
+            block = self.blockchain.get_block_by_hash(block_hash)
+            if not block:
+                return 0
+            parent_work = self.calculate_chain_work(block.block_header.hash_prev_block)
+            # Count leading zeros in block hash
+            work = len(block.blockhash) - len(block.blockhash.lstrip('0'))
+            self.chain_work[block_hash] = parent_work + work
+        return self.chain_work[block_hash]
+    
+    def handle_fork(self, new_block: Block) -> bool:
+        """Handle potential blockchain fork."""
+        current_tip = self.blockchain.height_map[self.blockchain.current_height]
+        
+        # If new block builds on current tip, no fork
+        if new_block.block_header.hash_prev_block == current_tip:
+            return True
+        
+        logging.info(f"Potential fork detected at height {self.blockchain.current_height}")
+        
+        # Calculate work for both chains
+        new_chain_work = self.calculate_chain_work(new_block.blockhash)
+        current_chain_work = self.calculate_chain_work(current_tip)
+        
+        logging.info(f"New chain work: {new_chain_work}, Current chain work: {current_chain_work}")
+        
+        # If new chain has more work, reorganize
+        if new_chain_work > current_chain_work:
+            logging.info("Fork resolution: Switching to new chain with more work")
+            self.reorganize_chain(new_block)
+            return True
+        
+        logging.info("Fork resolution: Keeping current chain")
+        return False
+    
+    def reorganize_chain(self, new_tip: Block) -> None:
+        """Reorganize the blockchain to follow the new chain."""
+        # Find common ancestor
+        current_tip = self.blockchain.height_map[self.blockchain.current_height]
+        new_blocks = []
+        old_blocks = []
+        
+        # Collect blocks in new chain
+        block = new_tip
+        while block and block.blockhash != current_tip:
+            new_blocks.insert(0, block)
+            block = self.blockchain.get_block_by_hash(block.block_header.hash_prev_block)
+        
+        # Collect blocks in old chain
+        block = self.blockchain.get_block_by_hash(current_tip)
+        while block and block.blockhash != new_blocks[0].block_header.hash_prev_block:
+            old_blocks.append(block)
+            block = self.blockchain.get_block_by_hash(block.block_header.hash_prev_block)
+        
+        logging.info(f"Chain reorganization: Removing {len(old_blocks)} blocks, adding {len(new_blocks)} blocks")
+        
+        # Remove old blocks
+        for block in old_blocks:
+            # Return transactions to mempool
+            for tx in block.transactions:
+                if not tx.is_coinbase:
+                    self.mempool.add_transaction(tx)
+        
+        # Add new blocks
+        for block in new_blocks:
+            self.blockchain.add_block(block.transactions)
     
     def mine_blocks(self):
         """Mining loop that runs in a separate thread."""
-        logging.info("Starting mining thread")
+        logging.info("Starting mining thread")  # Changed to INFO
         while not self.mining_event.is_set():
             # Generate a new transaction every 2-5 seconds
             if random.random() < 0.2:  # 20% chance each second
                 tx = self.generate_random_transaction()
-                logging.info(f"Generated new transaction: {tx.transaction_hash[:8]}...")
                 self.mempool.add_transaction(tx)
                 self.seen_transactions.add(tx.transaction_hash)
                 self.broadcast_transaction(tx)
+                self.new_transaction_event.set()  # Signal new transaction
             
-            # Try to mine a block
-            transactions = self.mempool.get_transactions(10)  # Get up to 10 transactions
-            if transactions:
-                logging.info(f"Attempting to mine block with {len(transactions)} transactions")
-                
-                prev_block_hash = self.blockchain.height_map[self.blockchain.current_height]
-                new_block = Block(prev_block_hash)
-                new_block.block_header.bits = TARGET_BITS
-                
-                for tx in transactions:
-                    new_block.add_transaction(tx)
-                
-                start_time = time.time()
-                attempts = 0
-                while not self.mining_event.is_set():
-                    if int(new_block.blockhash, 16) < HEX_TARGET:
-                        end_time = time.time()
-                        logging.info(f"Successfully mined block at height {self.blockchain.current_height + 1}")
-                        logging.info(f"Mining took {end_time - start_time:.2f} seconds and {attempts} attempts")
-                        logging.info(f"Block hash: {new_block.blockhash}")
-                        
-                        self.blockchain.add_block(transactions)
-                        self.seen_blocks.add(new_block.blockhash)
-                        self.broadcast_block(new_block)
-                        time.sleep(random.randint(0, 3))
-                        break
+            # Get transactions for mining
+            if not self.mining_block or self.new_transaction_event.is_set():
+                transactions = self.mempool.get_transactions(10)
+                if transactions:
+                    prev_block_hash = self.blockchain.height_map[self.blockchain.current_height]
+                    self.mining_block = Block(prev_block_hash)
+                    self.mining_block.block_header.bits = TARGET_BITS
+                    self.mining_transactions = set()
                     
-                    new_block.block_header.increment_nonce()
-                    new_block._update_block()
-                    attempts += 1
+                    # Create coinbase transaction
+                    coinbase_tx = Transaction.create_coinbase(
+                        value=50_000,  # 50 Barbaracoins
+                        recipient_script=self.current_wallet.get_address() if hasattr(self, 'current_wallet') else Wallet().get_address()
+                    )
+                    self.mining_block.add_transaction(coinbase_tx)
                     
-                    if attempts % 1000 == 0:
-                        logging.debug(f"Mining attempt {attempts}, current hash: {new_block.blockhash[:16]}...")
-                
-                time.sleep(1)  # Check every second
+                    # Add other transactions to block
+                    for tx in transactions:
+                        self.mining_block.add_transaction(tx)
+                        self.mining_transactions.add(tx.transaction_hash)
+                    
+                    self.new_transaction_event.clear()
+                    logging.debug(f"Mining new block at height {self.blockchain.current_height + 1}")  # Changed to DEBUG
+            
+            # Try to mine the block
+            if self.mining_block:
+                if int(self.mining_block.blockhash, 16) < HEX_TARGET:
+                    logging.info(f"Successfully mined block at height {self.blockchain.current_height + 1}")  # Changed to INFO
+                    
+                    if self.handle_fork(self.mining_block):
+                        self.blockchain.add_block(self.mining_block.transactions)
+                        self.seen_blocks.add(self.mining_block.blockhash)
+                        self.broadcast_block(self.mining_block)
+                        logging.info("Block added to blockchain and broadcast to peers")  # Changed to INFO
+                    
+                    self.mining_block = None
+                    self.mining_transactions.clear()
+                    time.sleep(random.randint(0, 3))
+                else:
+                    self.mining_block.block_header.increment_nonce()
+                    self.mining_block._update_block()
+            
+            time.sleep(0.1)  # Small delay to prevent CPU overuse
     
     def add_peer(self, peer_addr: str, handshaked: bool = False) -> None:
         """Add a peer to our known peers list."""
@@ -309,16 +402,17 @@ class FullNode:
     def handshake_with_node(self, node_addr: str):
         """Perform handshake with another node."""
         if not self.should_handshake(node_addr):
+            logging.debug(f"Skipping handshake with {node_addr}: already handshaked or self")
             return False
             
-        print(f"\nInitiating handshake with node at {node_addr}")
+        logging.info(f"\nInitiating handshake with node at {node_addr}")
         
         # Create handshake request
         handshake = blockchain_pb2.HandshakeRequest(
             version=self.version,
             time=int(time.time()),
             addr_me=self.addr_me,
-            best_height=self.best_height
+            best_height=self.blockchain.current_height
         )
         
         try:
@@ -326,19 +420,30 @@ class FullNode:
             with grpc.insecure_channel(f"{node_addr}:{self.node_port}") as channel:
                 stub = blockchain_pb2_grpc.FullNodeServiceStub(channel)
                 
+                logging.info(f"Sending handshake to {node_addr}")
+                logging.info(f"  Version: {self.version}")
+                logging.info(f"  Best Height: {self.blockchain.current_height}")
+                
                 # Send handshake
                 response = stub.Handshake(handshake)
                 
                 # Mark this node as handshaked
                 with self.handshake_lock:
                     self.handshaked_peers.add(node_addr)
+                    logging.info(f"Successfully handshaked with {node_addr}")
+                    logging.info(f"Total handshaked peers: {len(self.handshaked_peers)}")
                 
                 # Process response and discover new peers
                 new_peers = set()
                 for peer_addr in response.node_addresses:
+                    if peer_addr not in self.known_peers:
+                        logging.info(f"Discovered new peer: {peer_addr}")
                     self.add_peer(peer_addr)
                     if self.should_handshake(peer_addr):
                         new_peers.add(peer_addr)
+                
+                logging.info(f"Known peers after handshake: {len(self.known_peers)}")
+                logging.info(f"New peers to handshake with: {len(new_peers)}")
                 
                 # Handshake with any newly discovered peers
                 for peer_addr in new_peers:
@@ -352,7 +457,7 @@ class FullNode:
                 return True
                 
         except grpc.RpcError as e:
-            print(f"Failed to handshake with node {node_addr}: {e}")
+            logging.error(f"Failed to handshake with node {node_addr}: {e}")
             return False
     
     def start(self):
@@ -375,18 +480,46 @@ class FullNode:
         logging.info(f"Known peers: {self.known_peers}")
         logging.info(f"Handshaked peers: {self.handshaked_peers}")
         
-        # Start mining in a separate thread
+        # Start a background thread for keeping the server alive
+        def keep_alive():
+            try:
+                while True:
+                    time.sleep(3600)  # Sleep for 1 hour
+            except KeyboardInterrupt:
+                self.server.stop(0)
+        
+        threading.Thread(target=keep_alive, daemon=True).start()
+    
+    def start_mining(self):
+        """Start mining blocks in a separate thread."""
+        if hasattr(self, 'mining_thread') and self.mining_thread and self.mining_thread.is_alive():
+            logging.info("Mining is already running")
+            return False
+            
         self.mining_thread = threading.Thread(target=self.mine_blocks, daemon=True)
         self.mining_thread.start()
         logging.info("Mining thread started")
+        return True
         
-        try:
-            while True:
-                time.sleep(3600)
-        except KeyboardInterrupt:
-            logging.info("Node shutting down")
-            self.mining_event.set()
-            self.server.stop(0)
+    def stop_mining(self):
+        """Stop the mining thread."""
+        if not hasattr(self, 'mining_thread') or not self.mining_thread:
+            logging.info("Mining is not running")
+            return False
+            
+        self.mining_thread = None
+        logging.info("Mining thread stopped")
+        return True
+        
+    def get_mining_info(self):
+        """Get current mining status and information."""
+        is_mining = hasattr(self, 'mining_thread') and self.mining_thread and self.mining_thread.is_alive()
+        return {
+            'is_mining': is_mining,
+            'mining_address': self.current_wallet.get_address() if hasattr(self, 'current_wallet') else None,
+            'blockchain_height': self.blockchain.current_height,
+            'mempool_size': self.mempool.size()
+        }
 
 def main():
     # DNS seed address should be provided by Docker's DNS resolution

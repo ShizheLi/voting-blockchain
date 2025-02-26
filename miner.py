@@ -15,6 +15,7 @@ class Miner:
         self.blockchain = blockchain
         self.mempool = mempool
         self.miner_address = miner_address
+        print(f"Miner initialized with address: {self.miner_address}")
     
     def _calculate_target(self) -> int:
         """Calculate the target value from bits."""
@@ -37,11 +38,12 @@ class Miner:
             print("No transactions in mempool to mine")
             return None
         
-        # Create coinbase transaction
+        # Create coinbase transaction with current wallet address
         coinbase_tx = Transaction.create_coinbase(
             self.BLOCK_REWARD,
-            f"Reward to {self.miner_address}"
+            self.miner_address  # Use the current wallet address
         )
+        print(f"Created coinbase transaction with reward to: {self.miner_address}")
         
         # Create new block
         prev_block_hash = self.blockchain.height_map[self.blockchain.current_height]

@@ -34,5 +34,6 @@ COPY network/ network/
 # Set Python path
 ENV PYTHONPATH=/app
 
-# Run the full node
-CMD ["python3", "network/full_node.py"] 
+# Run the CLI by default, but allow overriding with CMD
+ENTRYPOINT ["python3"]
+CMD ["cli.py"] 

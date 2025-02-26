@@ -19,6 +19,8 @@ services:
       - barbaracoin_net
     ports:
       - "58334:58333" # Map to different host port to avoid conflicts
+    tty: true
+    stdin_open: true
 
   node_b:
     build:
