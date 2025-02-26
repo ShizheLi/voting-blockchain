@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package blockchain;
+
+// Service definition for DNS seed node
+service NodeRegistry {
+  // Register a new node with the network
+  rpc RegisterNode (Registration) returns (NodeList) {}
+}
+
+// Service definition for Full Node
+service FullNodeService {
+  // Handshake between nodes
+  rpc Handshake (HandshakeRequest) returns (NodeList) {}
+  
+  // Broadcast new transaction
+  rpc NewTransactionBroadcast (NewTransaction) returns (BroadcastResponse) {}
+  
+  // Broadcast new block
+  rpc NewBlockBroadcast (NewBlock) returns (BroadcastResponse) {}
+}
+
+// Registration information for a new node
+message Registration {
+  int32 version = 1;  // nVersion
+  int64 time = 2;     // nTime
+  string addr_me = 3; // addrMe (IP address)
+}
+
+// Handshake information
+message HandshakeRequest {
+  int32 version = 1;      // nVersion
+  int64 time = 2;        // nTime
+  string addr_me = 3;    // addrMe (IP address)
+  int32 best_height = 4; // bestHeight
+}
+
+// List of registered nodes
+message NodeList {
+  repeated string node_addresses = 1;  // List of IP addresses
+}
+
+// New transaction broadcast
+message NewTransaction {
+  bytes serialized_data = 1;  // Serialized transaction data
+  string transaction_hash = 2; // Transaction hash for deduplication
+}
+
+// New block broadcast
+message NewBlock {
+  bytes serialized_data = 1;  // Serialized block data
+  string block_hash = 2;      // Block hash for deduplication
+}
+
+// Response for broadcast operations
+message BroadcastResponse {
+  bool success = 1;
+  string message = 2;
+} 

@@ -1,0 +1,38 @@
+FROM python:3.9-slim
+
+WORKDIR /app
+
+# Create and activate virtual environment
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Copy requirements and install dependencies
+COPY requirements.txt .
+RUN pip3 install --no-cache-dir -r requirements.txt
+
+# Copy all Python modules
+COPY *.py .
+
+# Copy proto definition
+COPY proto/blockchain.proto proto/
+
+# Create generated directory and generate Python code from proto files
+RUN mkdir -p proto/generated && \
+    cd proto && \
+    python3 -m grpc_tools.protoc \
+    --proto_path=. \
+    --python_out=generated \
+    --grpc_python_out=generated \
+    blockchain.proto && \
+    cd generated && \
+    sed -i 's/import blockchain_pb2/from . import blockchain_pb2/' blockchain_pb2_grpc.py && \
+    touch __init__.py
+
+# Copy the network code
+COPY network/ network/
+
+# Set Python path
+ENV PYTHONPATH=/app
+
+# Run the full node
+CMD ["python3", "network/full_node.py"] 

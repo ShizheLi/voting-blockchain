@@ -1,0 +1,50 @@
+services:
+  dns_seed:
+    build:
+      context: .
+      dockerfile: Dockerfile.dns_seed
+    container_name: DNS_SEED
+    ports:
+      - "58333:58333"
+    networks:
+      - barbaracoin_net
+
+  node_a:
+    build:
+      context: .
+      dockerfile: Dockerfile.full_node
+    depends_on:
+      - dns_seed
+    networks:
+      - barbaracoin_net
+    ports:
+      - "58334:58333" # Map to different host port to avoid conflicts
+
+  node_b:
+    build:
+      context: .
+      dockerfile: Dockerfile.full_node
+    depends_on:
+      - dns_seed
+      - node_a
+    networks:
+      - barbaracoin_net
+    ports:
+      - "58335:58333" # Map to different host port to avoid conflicts
+
+  node_c:
+    build:
+      context: .
+      dockerfile: Dockerfile.full_node
+    depends_on:
+      - dns_seed
+      - node_a
+      - node_b
+    networks:
+      - barbaracoin_net
+    ports:
+      - "58336:58333" # Map to different host port to avoid conflicts
+
+networks:
+  barbaracoin_net:
+    driver: bridge
