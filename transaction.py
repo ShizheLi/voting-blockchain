@@ -66,4 +66,16 @@ class Transaction:
         for output in self.list_of_outputs:
             print(f"  Value: {output.value/1000:.3f} Barbaracoins")
             print(f"  Index: {output.index}")
-            print(f"  Script: {output.script}") 
+            print(f"  Script: {output.script}")
+    
+    def to_dict(self) -> dict:
+        """Convert transaction to dictionary for serialization."""
+        return {
+            'version': self.version_number,
+            'in_counter': self.in_counter,
+            'inputs': self.list_of_inputs,
+            'out_counter': self.out_counter,
+            'outputs': [output.to_dict() for output in self.list_of_outputs],
+            'is_coinbase': self.is_coinbase,
+            'transaction_hash': self.transaction_hash
+        } 

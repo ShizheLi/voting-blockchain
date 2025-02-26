@@ -11,6 +11,7 @@ from block import Block
 from network.full_node import FullNode
 from proto.generated import blockchain_pb2, blockchain_pb2_grpc
 import threading
+from voting import VoteTransaction, VoterRegistry
 
 class CLILoggingHandler(logging.Handler):
     def __init__(self, cli):
@@ -54,6 +55,13 @@ class BlockchainCLI(cmd.Cmd):
         root_logger = logging.getLogger()
         root_logger.addHandler(handler)
     
+    def _get_voter_registry(self):
+        """Get the voter registry from the node."""
+        if not self.node:
+            print("Node is not running")
+            return None
+        return self.node.voter_registry
+
     def do_start(self, arg):
         """Start the node and connect to the network."""
         if self.node:
@@ -339,6 +347,260 @@ class BlockchainCLI(cmd.Cmd):
             self.node.server.stop(0)
         print("Goodbye!")
         return True
+
+    def do_registervoter(self, arg):
+        """
+        Register a new voter.
+        Usage: registervoter <voter_id>
+        """
+        if not arg:
+            print("Usage: registervoter <voter_id>")
+            return
+
+        registry = self._get_voter_registry()
+        if not registry:
+            return
+
+        if registry.register_voter(arg):
+            print(f"Successfully registered voter: {arg}")
+            # Broadcast voter registration to other nodes
+            self.node.broadcast_voter_registration(arg)
+        else:
+            print(f"Failed to register voter: {arg}")
+
+    def do_addcandidate(self, arg):
+        """
+        Add a new candidate to the election.
+        Usage: addcandidate <candidate_name>
+        """
+        if not arg:
+            print("Usage: addcandidate <candidate_name>")
+            return
+
+        registry = self._get_voter_registry()
+        if not registry:
+            return
+
+        if registry.add_candidate(arg):
+            print(f"Successfully added candidate: {arg}")
+            # Broadcast candidate addition to other nodes
+            self.node.broadcast_candidate_addition(arg)
+        else:
+            print(f"Failed to add candidate: {arg}")
+
+    def do_startvoting(self, arg):
+        """Start the voting period."""
+        if not self.node:
+            print("Node not started. Use 'start' command first.")
+            return
+        
+        registry = self._get_voter_registry()
+        if not registry:
+            return
+            
+        if not registry.valid_candidates:
+            print("No candidates registered. Add candidates first.")
+            return
+            
+        # Start the voting period
+        registry.start_voting()
+        
+        # Start mining with shorter block interval (every 10 seconds)
+        self.node.start_mining(block_interval=10)
+        
+        print("Voting period has started!\n")
+        print("Registered candidates:")
+        for candidate in registry.valid_candidates:
+            print(f"- {candidate}")
+
+    def do_endvoting(self, arg):
+        """
+        End the voting period.
+        Usage: endvoting
+        """
+        if not self.node:
+            print("Node is not running")
+            return
+
+        registry = self._get_voter_registry()
+        if not registry:
+            return
+
+        if not registry.is_voting_open():
+            print("Voting is not currently open")
+            return
+
+        registry.end_voting()
+        print("Voting period has ended!")
+        self.do_results("")
+
+    def do_vote(self, arg):
+        """
+        Cast a vote for a candidate.
+        Usage: vote <voter_id> <candidate>
+        """
+        if not self.node:
+            print("Node is not running. Please start the node first.")
+            return
+
+        registry = self._get_voter_registry()
+        if not registry:
+            return
+
+        if not registry.is_voting_open():
+            print("Voting is not currently open")
+            return
+
+        args = arg.split()
+        if len(args) != 2:
+            print("Usage: vote <voter_id> <candidate>")
+            return
+
+        voter_id, candidate = args
+
+        if not registry.is_registered(voter_id):
+            print(f"Error: Voter {voter_id} is not registered")
+            return
+
+        if not registry.is_valid_candidate(candidate):
+            print(f"Error: {candidate} is not a valid candidate")
+            return
+
+        if registry.has_voted(voter_id):
+            print(f"Error: Voter {voter_id} has already voted")
+            return
+
+        # Create and broadcast vote transaction
+        vote_tx = VoteTransaction(voter_id, candidate)
+        self.node.mempool.add_transaction(vote_tx)
+        self.node.broadcast_transaction(vote_tx)
+        registry.add_pending_vote(vote_tx)
+        
+        print(f"Vote cast for {candidate} by voter {voter_id}")
+        print("Vote is pending confirmation. Use 'votestatus <voter_id>' to check status.")
+
+    def do_votestatus(self, arg):
+        """
+        Check the status of a voter's vote.
+        Usage: votestatus <voter_id>
+        """
+        if not arg:
+            print("Usage: votestatus <voter_id>")
+            return
+
+        registry = self._get_voter_registry()
+        if not registry:
+            return
+
+        if not registry.is_registered(arg):
+            print(f"Error: Voter {arg} is not registered")
+            return
+
+        status = registry.get_vote_status(arg)
+        if status:
+            print(f"\nVote Status for {arg}:")
+            print(f"Status: {status['status']}")
+            print(f"Candidate: {status['candidate']}")
+            print(f"Time: {time.ctime(status['time'])}")
+        else:
+            print(f"No vote found for voter {arg}")
+
+    def do_pendingvotes(self, arg):
+        """
+        List all pending votes.
+        Usage: pendingvotes
+        """
+        registry = self._get_voter_registry()
+        if not registry:
+            return
+
+        if not registry.pending_votes:
+            print("No pending votes")
+            return
+
+        print("\nPending Votes:")
+        print("-------------")
+        for voter_id, vote in registry.pending_votes.items():
+            print(f"Voter: {voter_id}")
+            print(f"Candidate: {vote.candidate}")
+            print(f"Time: {time.ctime(vote.timestamp)}")
+            print()
+
+    def do_listvotes(self, arg):
+        """
+        List all confirmed votes in the blockchain.
+        Usage: listvotes
+        """
+        if not self.node:
+            print("Node is not running")
+            return
+
+        registry = self._get_voter_registry()
+        if not registry:
+            return
+
+        print("\nConfirmed Votes in Blockchain:")
+        print("---------------------------")
+        vote_count = 0
+        processed_votes = set()  # Track processed vote transactions
+
+        for height in range(self.node.blockchain.current_height + 1):
+            block = self.node.blockchain.get_block_by_height(height)
+            for tx in block.transactions:
+                if hasattr(tx, 'is_vote') and tx.is_vote:
+                    # Skip if we've already processed this vote transaction
+                    if tx.transaction_hash in processed_votes:
+                        continue
+                    
+                    vote_count += 1
+                    processed_votes.add(tx.transaction_hash)
+                    print(f"Block {height}:")
+                    print(f"  Voter: {tx.voter_id}")
+                    print(f"  Candidate: {tx.candidate}")
+                    print(f"  Time: {time.ctime(tx.timestamp)}")
+                    registry.confirm_vote(tx)
+                    print()
+
+        if vote_count == 0:
+            print("No confirmed votes found in blockchain")
+        else:
+            print(f"Total confirmed votes: {vote_count}")
+
+    def do_results(self, arg):
+        """
+        Display current voting results.
+        Usage: results [--full]
+        """
+        registry = self._get_voter_registry()
+        if not registry:
+            return
+
+        results = registry.get_results()
+        if not results:
+            print("No votes recorded yet")
+            return
+
+        print("\nCurrent Voting Results:")
+        print("----------------------")
+        total_votes = sum(results.values())
+        
+        for candidate, votes in results.items():
+            percentage = (votes / total_votes * 100) if total_votes > 0 else 0
+            print(f"{candidate}: {votes} votes ({percentage:.1f}%)")
+
+        print(f"\nTotal votes: {total_votes}")
+        
+        if "--full" in arg:
+            print("\nVoting Details:")
+            print("--------------")
+            print("Confirmed votes:")
+            for voter_id, vote in registry.confirmed_votes.items():
+                print(f"  {voter_id} -> {vote.candidate}")
+            
+            if registry.pending_votes:
+                print("\nPending votes:")
+                for voter_id, vote in registry.pending_votes.items():
+                    print(f"  {voter_id} -> {vote.candidate} (pending)")
 
 def main():
     try:

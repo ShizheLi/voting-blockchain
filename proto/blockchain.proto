@@ -38,6 +38,7 @@ message HandshakeRequest {
 // List of registered nodes
 message NodeList {
   repeated string node_addresses = 1;  // List of IP addresses
+  bytes registry_data = 2;            // Serialized registry data (candidates, voters, etc.)
 }
 
 // New transaction broadcast

@@ -22,4 +22,8 @@ class TxnMemoryPool:
     
     def size(self) -> int:
         """Return the number of transactions in the pool."""
-        return len(self.transactions) 
+        return len(self.transactions)
+
+    def has_pending_transactions(self) -> bool:
+        """Check if there are any pending transactions in the pool."""
+        return len(self.transactions) > 0 

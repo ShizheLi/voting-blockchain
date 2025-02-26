@@ -9,6 +9,7 @@ from typing import Set, Dict
 import pickle
 import logging
 from wallet import Wallet
+from utils import double_sha256
 
 from proto.generated import blockchain_pb2
 from proto.generated import blockchain_pb2_grpc
@@ -40,10 +41,10 @@ class FullNodeServicer(blockchain_pb2_grpc.FullNodeServiceServicer):
         node_addr = request.addr_me
         best_height = request.best_height
         
-        logging.debug(f"Received handshake from node {node_addr}")  # Changed to DEBUG
-        logging.debug(f"  Version: {version}")  # Changed to DEBUG
-        logging.debug(f"  Time: {time.ctime(node_time)}")  # Changed to DEBUG
-        logging.debug(f"  Best Height: {best_height}")  # Changed to DEBUG
+        logging.debug(f"Received handshake from node {node_addr}")
+        logging.debug(f"  Version: {version}")
+        logging.debug(f"  Time: {time.ctime(node_time)}")
+        logging.debug(f"  Best Height: {best_height}")
         
         # Add the node to our known peers and mark as handshaked
         self.node.add_peer(node_addr, handshaked=True)
@@ -56,12 +57,41 @@ class FullNodeServicer(blockchain_pb2_grpc.FullNodeServiceServicer):
                 daemon=True
             ).start()
         
-        return blockchain_pb2.NodeList(node_addresses=list(self.node.known_peers))
+        # Prepare registry data for synchronization
+        registry_data = {
+            'candidates': list(self.node.voter_registry.valid_candidates),
+            'voters': list(self.node.voter_registry.registered_voters),
+            'voting_open': self.node.voter_registry.voting_open
+        }
+        
+        # Send registry data along with node addresses
+        response = blockchain_pb2.NodeList(
+            node_addresses=list(self.node.known_peers),
+            registry_data=json.dumps(registry_data).encode()
+        )
+        
+        return response
     
     def NewTransactionBroadcast(self, request, context):
         """Handle incoming transaction broadcast."""
         tx_hash = request.transaction_hash
         
+        # Handle non-transaction messages (candidate additions and voter registrations)
+        if tx_hash == "message":
+            try:
+                message_data = request.serialized_data.decode()
+                self.node.handle_message(message_data)
+                return blockchain_pb2.BroadcastResponse(
+                    success=True,
+                    message="Message processed successfully"
+                )
+            except Exception as e:
+                return blockchain_pb2.BroadcastResponse(
+                    success=False,
+                    message=f"Failed to process message: {str(e)}"
+                )
+        
+        # Check if we've already seen this transaction
         if tx_hash in self.node.seen_transactions:
             logging.debug(f"Ignoring already seen transaction: {tx_hash[:8]}...")
             return blockchain_pb2.BroadcastResponse(
@@ -69,11 +99,31 @@ class FullNodeServicer(blockchain_pb2_grpc.FullNodeServiceServicer):
                 message="Transaction already known"
             )
         
-        tx = pickle.loads(request.serialized_data)
+        # Add to seen transactions before processing to prevent duplicates
+        self.node.seen_transactions.add(tx_hash)
+        
+        # Deserialize transaction data
+        tx_data = json.loads(request.serialized_data.decode())
+        
+        # Create appropriate transaction type
+        if tx_data.get('is_vote', False):
+            from voting import VoteTransaction
+            tx = VoteTransaction.from_dict(tx_data)
+            # Update voter registry
+            self.node.voter_registry.add_pending_vote(tx)
+        else:
+            tx = Transaction()
+            tx.version_number = tx_data['version']
+            tx.list_of_inputs = tx_data['inputs']
+            tx.in_counter = len(tx.list_of_inputs)
+            tx.list_of_outputs = [Output(**output) for output in tx_data['outputs']]
+            tx.out_counter = len(tx.list_of_outputs)
+            tx.is_coinbase = tx_data['is_coinbase']
+            tx._calculate_hash()
+        
         logging.info(f"Received new transaction: {tx_hash[:8]}...")
         
         self.node.mempool.add_transaction(tx)
-        self.node.seen_transactions.add(tx_hash)
         self.node.broadcast_transaction(tx, exclude_peer=context.peer())
         
         return blockchain_pb2.BroadcastResponse(
@@ -107,6 +157,25 @@ class FullNodeServicer(blockchain_pb2_grpc.FullNodeServiceServicer):
             message="Block accepted and propagated"
         )
 
+    def handle_message(self, message):
+        """Handle incoming messages from peers"""
+        try:
+            message_data = message.decode()
+            message_json = json.loads(message_data)
+            
+            if message_json.get('type') == 'candidate_addition':
+                self.node.handle_candidate_addition(message_data)
+            elif message_json.get('type') == 'voter_registration':
+                self.node.handle_voter_registration(message_data)
+            else:
+                # Handle other message types
+                pass
+                
+        except json.JSONDecodeError:
+            logging.error("Failed to decode message as JSON")
+        except Exception as e:
+            logging.error(f"Error handling message: {e}")
+
 class FullNode:
     def __init__(self, dns_seed_host: str, dns_seed_port: int = 58333, node_port: int = 58333):
         self.version = 1
@@ -124,6 +193,10 @@ class FullNode:
         self.mempool = TxnMemoryPool()
         self.best_height = 0  # Initially only has genesis block
         
+        # Initialize voter registry
+        from voting import VoterRegistry
+        self.voter_registry = VoterRegistry()
+        
         # Create gRPC server
         self.server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
         blockchain_pb2_grpc.add_FullNodeServiceServicer_to_server(
@@ -138,7 +211,26 @@ class FullNode:
         self.chain_work = {}  # Track work for each chain tip
         self.fork_points = {}  # Track potential fork points
         self.new_transaction_event = threading.Event()  # Signal for new transaction
-    
+        self.last_block_time = 0  # Track when the last block was mined
+
+    def handle_message(self, message_data):
+        """Handle incoming messages from peers"""
+        try:
+            message_json = json.loads(message_data)
+            
+            if message_json.get('type') == 'candidate_addition':
+                self.handle_candidate_addition(message_data)
+            elif message_json.get('type') == 'voter_registration':
+                self.handle_voter_registration(message_data)
+            else:
+                # Handle other message types
+                pass
+                
+        except json.JSONDecodeError:
+            logging.error("Failed to decode message as JSON")
+        except Exception as e:
+            logging.error(f"Error handling message: {e}")
+
     def generate_random_transaction(self) -> Transaction:
         """Generate a random transaction for testing."""
         # Create a coinbase transaction instead of random transactions
@@ -151,7 +243,17 @@ class FullNode:
     def broadcast_transaction(self, tx: Transaction, exclude_peer: str = None):
         """Broadcast transaction to all known peers."""
         # Prepare the broadcast message
-        serialized_data = pickle.dumps(tx)
+        if hasattr(tx, 'to_dict'):
+            tx_data = tx.to_dict()
+        else:
+            tx_data = {
+                'version': tx.version_number,
+                'inputs': tx.list_of_inputs,
+                'outputs': [output.to_dict() for output in tx.list_of_outputs],
+                'is_coinbase': tx.is_coinbase
+            }
+        
+        serialized_data = json.dumps(tx_data).encode()
         broadcast_msg = blockchain_pb2.NewTransaction(
             serialized_data=serialized_data,
             transaction_hash=tx.transaction_hash
@@ -300,6 +402,7 @@ class FullNode:
                     prev_block_hash = self.blockchain.height_map[self.blockchain.current_height]
                     self.mining_block = Block(prev_block_hash)
                     self.mining_block.block_header.bits = TARGET_BITS
+                    self.mining_block.block_header.increment_nonce()
                     self.mining_transactions = set()
                     
                     # Create coinbase transaction
@@ -367,37 +470,34 @@ class FullNode:
         return ip
     
     def register_with_dns_seed(self):
-        """Register this node with the DNS seed and get the previous node."""
-        print(f"Connecting to DNS seed at {self.dns_seed_addr}")
-        
-        # Create registration request
-        registration = blockchain_pb2.Registration(
-            version=self.version,
-            time=int(time.time()),
-            addr_me=self.addr_me
-        )
-        
+        """Register with DNS seed and get list of known peers."""
         try:
-            # Create gRPC channel
-            with grpc.insecure_channel(self.dns_seed_addr) as channel:
-                stub = blockchain_pb2_grpc.NodeRegistryStub(channel)
-                
-                # Send registration
-                response = stub.RegisterNode(registration)
-                
-                # Process response
-                if response.node_addresses:
-                    previous_node = response.node_addresses[0]
-                    print("Received previous node address:", previous_node)
-                    self.add_peer(previous_node)
-                    return previous_node
-                else:
-                    print("No previous nodes registered")
-                    return None
+            channel = grpc.insecure_channel(self.dns_seed_addr)
+            stub = blockchain_pb2_grpc.NodeRegistryStub(channel)
+            
+            # Create registration request
+            request = blockchain_pb2.Registration(
+                version=self.version,
+                time=int(time.time()),
+                addr_me=self.addr_me
+            )
+            
+            # Send registration request
+            response = stub.RegisterNode(request)
+            
+            # Process response
+            if response.node_addresses:
+                for node in response.node_addresses:
+                    logging.debug(f"Discovered peer: {node}")
+                    self.add_peer(node)
+                return response.node_addresses
+            else:
+                logging.debug("No previous nodes registered")
+                return []
                 
         except grpc.RpcError as e:
-            print(f"Failed to register with DNS seed: {e}")
-            return None
+            logging.debug(f"DNS seed connection: {e}")
+            return []
     
     def handshake_with_node(self, node_addr: str):
         """Perform handshake with another node."""
@@ -426,6 +526,31 @@ class FullNode:
                 
                 # Send handshake
                 response = stub.Handshake(handshake)
+                
+                # Process registry data if available
+                if hasattr(response, 'registry_data') and response.registry_data:
+                    try:
+                        registry_data = json.loads(response.registry_data.decode())
+                        # Sync candidates
+                        for candidate in registry_data.get('candidates', []):
+                            if candidate not in self.voter_registry.valid_candidates:
+                                self.voter_registry.add_candidate(candidate)
+                                logging.info(f"Synchronized candidate from peer: {candidate}")
+                        
+                        # Sync voters
+                        for voter in registry_data.get('voters', []):
+                            if voter not in self.voter_registry.registered_voters:
+                                self.voter_registry.register_voter(voter)
+                                logging.info(f"Synchronized voter from peer: {voter}")
+                        
+                        # Sync voting status
+                        if registry_data.get('voting_open', False) and not self.voter_registry.voting_open:
+                            self.voter_registry.start_voting()
+                            logging.info("Synchronized voting status: voting is open")
+                    except json.JSONDecodeError:
+                        logging.error("Failed to decode registry data from peer")
+                    except Exception as e:
+                        logging.error(f"Error processing registry data: {e}")
                 
                 # Mark this node as handshaked
                 with self.handshake_lock:
@@ -470,15 +595,37 @@ class FullNode:
         self.server.start()
         
         # First register with DNS seed
-        initial_peer = self.register_with_dns_seed()
+        print(f"Connecting to DNS seed at {self.dns_seed_addr}")
+        initial_peers = self.register_with_dns_seed()
         
-        # If we got an initial peer, start the handshake process
-        if initial_peer:
-            self.handshake_with_node(initial_peer)
+        # Try to connect to all known peers
+        if initial_peers:
+            for peer in initial_peers:
+                if peer != self.addr_me:  # Don't connect to self
+                    self.handshake_with_node(peer)
+                    time.sleep(1)  # Add small delay between handshakes
         
         logging.info("Node initialization complete")
         logging.info(f"Known peers: {self.known_peers}")
         logging.info(f"Handshaked peers: {self.handshaked_peers}")
+        
+        # Start a background thread for peer discovery and maintenance
+        def maintain_connections():
+            while True:
+                try:
+                    # Try to discover and connect to new peers
+                    new_peers = self.register_with_dns_seed()
+                    if new_peers:
+                        for peer in new_peers:
+                            if peer not in self.handshaked_peers and peer != self.addr_me:
+                                self.handshake_with_node(peer)
+                                time.sleep(1)
+                    time.sleep(60)  # Check for new peers every 60 seconds
+                except Exception as e:
+                    logging.debug(f"Connection maintenance: {e}")
+                    time.sleep(5)
+        
+        threading.Thread(target=maintain_connections, daemon=True).start()
         
         # Start a background thread for keeping the server alive
         def keep_alive():
@@ -490,36 +637,121 @@ class FullNode:
         
         threading.Thread(target=keep_alive, daemon=True).start()
     
-    def start_mining(self):
-        """Start mining blocks in a separate thread."""
-        if hasattr(self, 'mining_thread') and self.mining_thread and self.mining_thread.is_alive():
-            logging.info("Mining is already running")
-            return False
-            
-        self.mining_thread = threading.Thread(target=self.mine_blocks, daemon=True)
+    def start_mining(self, block_interval=60):
+        """Start mining blocks with the specified interval."""
+        if self.mining_thread and self.mining_thread.is_alive():
+            logging.info("Mining already in progress")
+            return
+
+        logging.info("Starting mining thread")
+        self.mining_thread = threading.Thread(target=self._mine_blocks, args=(block_interval,))
+        self.mining_thread.daemon = True
         self.mining_thread.start()
         logging.info("Mining thread started")
-        return True
+
+    def _mine_blocks(self, block_interval):
+        """Mine new blocks at specified intervals."""
+        while True:
+            # Only mine if there are pending transactions or if the interval has passed
+            if self.mempool.has_pending_transactions() or self.last_block_time + block_interval <= time.time():
+                block = self._create_new_block()
+                if block:
+                    self._add_block(block)
+                    self.last_block_time = time.time()
+                    
+            # Sleep for a short time to prevent CPU overuse
+            time.sleep(1)
+
+    def _create_new_block(self):
+        """Create a new block with transactions from the mempool."""
+        transactions = self.mempool.get_transactions(10)
+        if not transactions:
+            return None
         
-    def stop_mining(self):
-        """Stop the mining thread."""
-        if not hasattr(self, 'mining_thread') or not self.mining_thread:
-            logging.info("Mining is not running")
-            return False
-            
-        self.mining_thread = None
-        logging.info("Mining thread stopped")
-        return True
+        prev_block_hash = self.blockchain.height_map[self.blockchain.current_height]
+        block = Block(prev_block_hash)
+        block.block_header.bits = TARGET_BITS
         
-    def get_mining_info(self):
-        """Get current mining status and information."""
-        is_mining = hasattr(self, 'mining_thread') and self.mining_thread and self.mining_thread.is_alive()
-        return {
-            'is_mining': is_mining,
-            'mining_address': self.current_wallet.get_address() if hasattr(self, 'current_wallet') else None,
-            'blockchain_height': self.blockchain.current_height,
-            'mempool_size': self.mempool.size()
+        # Create coinbase transaction
+        coinbase_tx = Transaction.create_coinbase(
+            value=50_000,  # 50 Barbaracoins
+            recipient_script=self.current_wallet.get_address() if hasattr(self, 'current_wallet') else Wallet().get_address()
+        )
+        block.add_transaction(coinbase_tx)
+        
+        # Add other transactions to block
+        for tx in transactions:
+            block.add_transaction(tx)
+        
+        return block
+
+    def _add_block(self, block: Block):
+        """Add a mined block to the blockchain."""
+        self.blockchain.add_block(block.transactions)
+        self.seen_blocks.add(block.blockhash)
+        self.broadcast_block(block)
+        logging.info("Block added to blockchain and broadcast to peers")
+
+    def broadcast_candidate_addition(self, candidate):
+        """Broadcast a new candidate to all peers."""
+        message = {
+            'type': 'candidate_addition',
+            'candidate': candidate,
+            'timestamp': int(time.time())
         }
+        self.broadcast_to_peers(json.dumps(message))
+        logging.info(f"Broadcasted candidate addition: {candidate}")
+
+    def handle_candidate_addition(self, message_data):
+        """Handle received candidate addition message."""
+        try:
+            message = json.loads(message_data)
+            candidate = message['candidate']
+            if self.voter_registry.add_candidate(candidate):
+                logging.info(f"Added candidate from peer: {candidate}")
+                # Rebroadcast to other peers
+                self.broadcast_candidate_addition(candidate)
+        except Exception as e:
+            logging.error(f"Error handling candidate addition: {e}")
+
+    def broadcast_voter_registration(self, voter_id):
+        """Broadcast a new voter registration to all peers."""
+        message = {
+            'type': 'voter_registration',
+            'voter_id': voter_id,
+            'timestamp': int(time.time())
+        }
+        self.broadcast_to_peers(json.dumps(message))
+        logging.info(f"Broadcasted voter registration: {voter_id}")
+
+    def handle_voter_registration(self, message_data):
+        """Handle received voter registration message."""
+        try:
+            message = json.loads(message_data)
+            voter_id = message['voter_id']
+            if self.voter_registry.register_voter(voter_id):
+                logging.info(f"Registered voter from peer: {voter_id}")
+                # Rebroadcast to other peers
+                self.broadcast_voter_registration(voter_id)
+        except Exception as e:
+            logging.error(f"Error handling voter registration: {e}")
+
+    def broadcast_to_peers(self, message):
+        """Broadcast a message to all connected peers."""
+        for peer in self.handshaked_peers:
+            try:
+                channel = grpc.insecure_channel(f"{peer}:{self.node_port}")
+                stub = blockchain_pb2_grpc.FullNodeServiceStub(channel)
+                request = blockchain_pb2.NewTransaction(
+                    serialized_data=message.encode(),
+                    transaction_hash="message"
+                )
+                response = stub.NewTransactionBroadcast(request)
+                if not response.success:
+                    logging.warning(f"Failed to broadcast to {peer}: {response.message}")
+            except Exception as e:
+                logging.error(f"Error broadcasting to {peer}: {e}")
+                continue
 
 def main():
     # DNS seed address should be provided by Docker's DNS resolution
