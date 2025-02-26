@@ -8,6 +8,7 @@ from concurrent import futures
 from typing import Set, Dict
 import pickle
 import logging
+from wallet import Wallet
 
 from proto.generated import blockchain_pb2
 from proto.generated import blockchain_pb2_grpc
@@ -140,12 +141,12 @@ class FullNode:
         input_data = f"tx_{int(time.time())}_{random.randint(0, 1000000)}"
         tx.add_input(input_data)
         
-        # Create 1-3 outputs with random values
+        # Create 1-3 outputs with random values using real addresses
         num_outputs = random.randint(1, 3)
         for i in range(num_outputs):
             value = random.randint(100, 10000)  # 0.1 to 10 Barbaracoins
-            script = f"Address_{random.randint(1000, 9999)}"
-            tx.add_output(value, script)
+            recipient_wallet = Wallet()  # Generate a new wallet for the recipient
+            tx.add_output(value, recipient_wallet.get_address())
         
         return tx
     
