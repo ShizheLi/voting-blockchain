@@ -9,7 +9,7 @@ services:
     networks:
       - barbaracoin_net
 
-  node_a:
+  node:
     build:
       context: .
       dockerfile: Dockerfile.full_node
@@ -17,35 +17,12 @@ services:
       - dns_seed
     networks:
       - barbaracoin_net
+    environment:
+      - NODE_NAME=${NODE_NAME:-default_node}
+    deploy:
+      replicas: ${NODE_COUNT:-3}
     ports:
-      - "58334:58333" # Map to different host port to avoid conflicts
-    tty: true
-    stdin_open: true
-
-  node_b:
-    build:
-      context: .
-      dockerfile: Dockerfile.full_node
-    depends_on:
-      - dns_seed
-      - node_a
-    networks:
-      - barbaracoin_net
-    ports:
-      - "58335:58333" # Map to different host port to avoid conflicts
-
-  node_c:
-    build:
-      context: .
-      dockerfile: Dockerfile.full_node
-    depends_on:
-      - dns_seed
-      - node_a
-      - node_b
-    networks:
-      - barbaracoin_net
-    ports:
-      - "58336:58333" # Map to different host port to avoid conflicts
+      - "${START_PORT:-58334}-${END_PORT:-58336}:58333"
 
 networks:
   barbaracoin_net:

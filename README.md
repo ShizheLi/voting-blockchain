@@ -1,5 +1,14 @@
 # 基于区块链的投票第一版
 
+### 启动项目
+
+```
+docker compose down  // 先确保停止所有节点
+docker compose up -d  // 再启动所有节点
+docker ps  // 查看容器名，比如node-a, node-b, node-c
+docker exec -it <container_name> python3 cli.py  // 进入容器
+```
+
 ### 1. 节点初始化
 
 ```
