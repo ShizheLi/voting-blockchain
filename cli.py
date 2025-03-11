@@ -38,10 +38,10 @@ class CLILoggingHandler(logging.Handler):
 
 class BlockchainCLI(cmd.Cmd):
     intro = """
-    Welcome to BarbaraCoin CLI!
+    ⭐️ Welcome to Blockchain-Based Voting System CLI! ⭐️
     Type help or ? to list commands.
     """
-    prompt = '(barbaracoin) '
+    prompt = '(Blockchain-Based Voting System) '
     
     def __init__(self):
         super().__init__()
@@ -71,20 +71,22 @@ class BlockchainCLI(cmd.Cmd):
         # Create initial wallet if none exists
         if not self.wallets:
             wallet = Wallet()
-            print("\nCreated initial wallet:")
-            print(f"Address: {wallet.get_address()}")
+            print("\n╔════════════════ INITIAL WALLET ════════════════╗")
+            print(f"║ Address: {wallet.get_address()}")
             self.wallets[wallet.get_address()] = wallet
             self.current_wallet = wallet
+            print("╚══════════════════════════════════════════════════╝")
 
-        print("\nInitializing node...")
+        print("\n┌─────────────── INITIALIZING NODE ───────────────┐")
         self.node = FullNode("DNS_SEED")
         
-        print("Starting node services...")
+        print("│ Starting node services...")
         self.node.start()
         
-        print("\nNode Status:")
-        print(f"Connected Peers: {len(self.node.handshaked_peers)}")
-        print(f"Blockchain Height: {self.node.blockchain.current_height}")
+        print("\n┌─────────────── NODE STATUS ───────────────┐")
+        print(f"│ Connected Peers: {len(self.node.handshaked_peers)}")
+        print(f"│ Blockchain Height: {self.node.blockchain.current_height}")
+        print("└───────────────────────────────────────────┘")
         print("\nNode started successfully. Use 'startmining' to begin mining blocks")
     
     def do_createwallet(self, arg):
@@ -97,10 +99,11 @@ class BlockchainCLI(cmd.Cmd):
         self.wallets[address] = wallet
         self.current_wallet = wallet
         
-        print("\nNew wallet created:")
-        print(f"Address: {address}")
-        print(f"Private Key: {wallet.get_private_key_hex()}")
-        print(f"Public Key: {wallet.get_public_key_hex()}")
+        print("\n╔════════════════ NEW WALLET CREATED ════════════════╗")
+        print(f"║ Address: {address}")
+        print(f"║ Private Key: {wallet.get_private_key_hex()}")
+        print(f"║ Public Key: {wallet.get_public_key_hex()}")
+        print("╚════════════════════════════════════════════════════╝")
     
     def do_listwallet(self, arg):
         """
@@ -111,10 +114,11 @@ class BlockchainCLI(cmd.Cmd):
             print("No wallets created yet")
             return
         
-        print("\nWallets:")
+        print("\n╔════════════════ WALLETS ════════════════╗")
         for address, wallet in self.wallets.items():
-            mark = "*" if wallet == self.current_wallet else " "
-            print(f"{mark} {address}")
+            mark = "✓" if wallet == self.current_wallet else " "
+            print(f"║ {mark} {address}")
+        print("╚═════════════════════════════════════════╝")
     
     def do_selectwallet(self, arg):
         """
@@ -153,8 +157,10 @@ class BlockchainCLI(cmd.Cmd):
                 if output.script == address:  # In our simplified model, script is the address
                     balance += output.value
         
-        print(f"\nBalance for {address}:")
-        print(f"{balance/1000:.3f} Barbaracoins")
+        print(f"\n┌─────────────── BALANCE ───────────────┐")
+        print(f"│    Address: {address}")
+        print(f"│ 💰 Amount: {balance/1000:.3f} Barbaracoins")
+        print("└─────────────────────────────────────────┘")
     
     def do_sendcoins(self, arg):
         """
@@ -210,11 +216,13 @@ class BlockchainCLI(cmd.Cmd):
         self.node.seen_transactions.add(tx.transaction_hash)
         self.node.broadcast_transaction(tx)
         
-        print(f"\nTransaction sent: {tx.transaction_hash}")
-        print(f"Amount: {amount:.3f} Barbaracoins")
-        print(f"Recipient: {recipient}")
+        print(f"\n┌─────────────── TRANSACTION SENT ───────────────┐")
+        print(f"│ 🆔 Transaction ID: {tx.transaction_hash}")
+        print(f"│ 💰 Amount: {amount:.3f} Barbaracoins")
+        print(f"│ 👤 Recipient: {recipient}")
         if change > 0:
-            print(f"Change: {change/1000:.3f} Barbaracoins")
+            print(f"│    Change: {change/1000:.3f} Barbaracoins")
+        print("└───────────────────────────────────────────────┘")
     
     def do_getblockcount(self, arg):
         """
@@ -253,22 +261,23 @@ class BlockchainCLI(cmd.Cmd):
             print("Block not found")
             return
         
-        print("\nBlock Information:")
-        print(f"Hash: {block.blockhash}")
-        print(f"Previous Block: {block.block_header.hash_prev_block}")
-        print(f"Merkle Root: {block.block_header.hash_merkle_root}")
-        print(f"Timestamp: {time.ctime(block.block_header.timestamp)}")
-        print(f"Nonce: {block.block_header.nonce}")
-        print(f"Transaction Count: {len(block.transactions)}")
+        print("\n╔════════════════ BLOCK INFORMATION ════════════════╗")
+        print(f"║    Hash: {block.blockhash}")
+        print(f"║    Previous Block: {block.block_header.hash_prev_block}")
+        print(f"║    Merkle Root: {block.block_header.hash_merkle_root}")
+        print(f"║ 🕒 Timestamp: {time.ctime(block.block_header.timestamp)}")
+        print(f"║     Nonce: {block.block_header.nonce}")
+        print(f"║ 📝 Transaction Count: {len(block.transactions)}")
         
         if '--verbose' in arg:
-            print("\nTransactions:")
+            print("\n┌─────────────── TRANSACTIONS ───────────────┐")
             for tx in block.transactions:
-                print(f"\n  Transaction: {tx.transaction_hash}")
-                print(f"  Input Count: {tx.in_counter}")
-                print(f"  Output Count: {tx.out_counter}")
+                print(f"\n│ 🆔 Transaction: {tx.transaction_hash}")
+                print(f"│    Input Count: {tx.in_counter}")
+                print(f"│    Output Count: {tx.out_counter}")
                 for output in tx.list_of_outputs:
-                    print(f"    Output: {output.value/1000:.3f} coins to {output.script}")
+                    print(f"│   💰 Output: {output.value/1000:.3f} coins to {output.script}")
+        print("╚═══════════════════════════════════════════════════╝")
     
     def do_getpeers(self, arg):
         """
@@ -279,10 +288,11 @@ class BlockchainCLI(cmd.Cmd):
             print("Node is not running")
             return
         
-        print("\nConnected Peers:")
+        print("\n╔════════════════ CONNECTED PEERS ════════════════╗")
         for peer in self.node.handshaked_peers:
-            print(f"  {peer}")
-        print(f"\nTotal: {len(self.node.handshaked_peers)} peers")
+            print(f"║ 🖥️ {peer}")
+        print(f"\n║    Total: {len(self.node.handshaked_peers)} peers")
+        print("╚═══════════════════════════════════════════════════╝")
     
     def do_getmempoolinfo(self, arg):
         """
@@ -293,13 +303,14 @@ class BlockchainCLI(cmd.Cmd):
             print("Node is not running")
             return
         
-        print("\nMemory Pool Information:")
-        print(f"Transaction Count: {self.node.mempool.size()}")
+        print("\n╔════════════════ MEMORY POOL INFO ════════════════╗")
+        print(f"║ 📝 Transaction Count: {self.node.mempool.size()}")
         
         if '--verbose' in arg:
-            print("\nPending Transactions:")
+            print("\n┌─────────────── PENDING TRANSACTIONS ───────────────┐")
             for tx in self.node.mempool.transactions:
-                print(f"  {tx.transaction_hash}: {len(tx.list_of_outputs)} outputs")
+                print(f"│ 🆔 {tx.transaction_hash}: {len(tx.list_of_outputs)} outputs")
+        print("╚════════════════════════════════════════════════════╝")
     
     def do_startmining(self, arg):
         """Start mining blocks."""
@@ -330,11 +341,12 @@ class BlockchainCLI(cmd.Cmd):
             return
             
         info = self.node.get_mining_info()
-        print("\nMining Status:")
-        print(f"Is Mining: {info['is_mining']}")
-        print(f"Mining Address: {info['mining_address']}")
-        print(f"Blockchain Height: {info['blockchain_height']}")
-        print(f"Mempool Size: {info['mempool_size']}")
+        print("\n╔════════════════ MINING STATUS ════════════════╗")
+        print(f"║ ⛏️ Is Mining: {info['is_mining']}")
+        print(f"║    Mining Address: {info['mining_address']}")
+        print(f"║    Blockchain Height: {info['blockchain_height']}")
+        print(f"║    Mempool Size: {info['mempool_size']}")
+        print("╚═══════════════════════════════════════════════╝")
     
     def do_exit(self, arg):
         """
@@ -408,10 +420,11 @@ class BlockchainCLI(cmd.Cmd):
         # Start mining with shorter block interval (every 10 seconds)
         self.node.start_mining(block_interval=10)
         
-        print("Voting period has started!\n")
-        print("Registered candidates:")
+        print("\n╔═══════════════════ VOTING STARTED ═══════════════════╗")
+        print("║ Registered candidates:")
         for candidate in registry.valid_candidates:
-            print(f"- {candidate}")
+            print(f"║ - {candidate}")
+        print("╚══════════════════════════════════════════════════════╝")
 
     def do_endvoting(self, arg):
         """
@@ -431,7 +444,7 @@ class BlockchainCLI(cmd.Cmd):
             return
 
         registry.end_voting()
-        print("Voting period has ended!")
+        print("\n╔═══════════════════ VOTING ENDED ═══════════════════╗")
         self.do_results("")
 
     def do_vote(self, arg):
@@ -476,8 +489,11 @@ class BlockchainCLI(cmd.Cmd):
         self.node.broadcast_transaction(vote_tx)
         registry.add_pending_vote(vote_tx)
         
-        print(f"Vote cast for {candidate} by voter {voter_id}")
-        print("Vote is pending confirmation. Use 'votestatus <voter_id>' to check status.")
+        print(f"\n┌─────────────── VOTE CAST ───────────────┐")
+        print(f"│    Voter: {voter_id}")
+        print(f"│ 👤 Candidate: {candidate}")
+        print("│ Vote is pending confirmation. Use 'votestatus <voter_id>' to check status.")
+        print("└─────────────────────────────────────────┘")
 
     def do_votestatus(self, arg):
         """
@@ -498,10 +514,12 @@ class BlockchainCLI(cmd.Cmd):
 
         status = registry.get_vote_status(arg)
         if status:
-            print(f"\nVote Status for {arg}:")
-            print(f"Status: {status['status']}")
-            print(f"Candidate: {status['candidate']}")
-            print(f"Time: {time.ctime(status['time'])}")
+            print(f"\n┌─────────────── VOTE STATUS ────────────┐")
+            print(f"│    Voter: {arg}")
+            print(f"│    Status: {status['status']}")
+            print(f"│ 👤 Candidate: {status['candidate']}")
+            print(f"│ 🕒 Time: {time.ctime(status['time'])}")
+            print( "└────────────────────────────────────────┘")
         else:
             print(f"No vote found for voter {arg}")
 
@@ -518,13 +536,13 @@ class BlockchainCLI(cmd.Cmd):
             print("No pending votes")
             return
 
-        print("\nPending Votes:")
-        print("-------------")
+        print("\n╔════════════════ PENDING VOTES ════════════════╗")
         for voter_id, vote in registry.pending_votes.items():
-            print(f"Voter: {voter_id}")
-            print(f"Candidate: {vote.candidate}")
-            print(f"Time: {time.ctime(vote.timestamp)}")
-            print()
+            print(f"║    Voter: {voter_id}")
+            print(f"║ 👤 Candidate: {vote.candidate}")
+            print(f"║ 🕒 Time: {time.ctime(vote.timestamp)}")
+            print("║--------------------------------------------")
+        print("╚═══════════════════════════════════════════════╝")
 
     def do_listvotes(self, arg):
         """
@@ -539,8 +557,7 @@ class BlockchainCLI(cmd.Cmd):
         if not registry:
             return
 
-        print("\nConfirmed Votes in Blockchain:")
-        print("---------------------------")
+        print("\n╔════════════════ CONFIRMED VOTES ════════════════╗")
         vote_count = 0
         processed_votes = set()  # Track processed vote transactions
 
@@ -554,17 +571,18 @@ class BlockchainCLI(cmd.Cmd):
                     
                     vote_count += 1
                     processed_votes.add(tx.transaction_hash)
-                    print(f"Block {height}:")
-                    print(f"  Voter: {tx.voter_id}")
-                    print(f"  Candidate: {tx.candidate}")
-                    print(f"  Time: {time.ctime(tx.timestamp)}")
+                    print(f"║    Block {height}:")
+                    print(f"║    Voter: {tx.voter_id}")
+                    print(f"║ 👤 Candidate: {tx.candidate}")
+                    print(f"║ 🕒 Time: {time.ctime(tx.timestamp)}")
                     registry.confirm_vote(tx)
-                    print()
+                    print("║--------------------------------------------")
 
         if vote_count == 0:
-            print("No confirmed votes found in blockchain")
+            print("║ No confirmed votes found in blockchain")
         else:
-            print(f"Total confirmed votes: {vote_count}")
+            print(f"║ 📊 Total confirmed votes: {vote_count}")
+        print("╚═════════════════════════════════════════════════╝")
 
     def do_results(self, arg):
         """
@@ -580,27 +598,26 @@ class BlockchainCLI(cmd.Cmd):
             print("No votes recorded yet")
             return
 
-        print("\nCurrent Voting Results:")
-        print("----------------------")
+        print("\n╔═══════════════════ VOTING RESULTS ═══════════════════╗")
         total_votes = sum(results.values())
         
         for candidate, votes in results.items():
             percentage = (votes / total_votes * 100) if total_votes > 0 else 0
-            print(f"{candidate}: {votes} votes ({percentage:.1f}%)")
+            print(f"║ 👤 {candidate}: {votes} votes ({percentage:.1f}%)")
 
-        print(f"\nTotal votes: {total_votes}")
+        print(f"\n║ 📊 Total votes: {total_votes}")
         
         if "--full" in arg:
-            print("\nVoting Details:")
-            print("--------------")
-            print("Confirmed votes:")
+            print("\n┌─────────────── VOTING DETAILS ───────────────┐")
+            print("│ Confirmed votes:")
             for voter_id, vote in registry.confirmed_votes.items():
-                print(f"  {voter_id} -> {vote.candidate}")
+                print(f"│    {voter_id} -> {vote.candidate}")
             
             if registry.pending_votes:
-                print("\nPending votes:")
+                print("\n│ Pending votes:")
                 for voter_id, vote in registry.pending_votes.items():
-                    print(f"  {voter_id} -> {vote.candidate} (pending)")
+                    print(f"│ ⏳ {voter_id} -> {vote.candidate} (pending)")
+        print("╚════════════════════════════════════════════════════╝")
 
 def main():
     try:
