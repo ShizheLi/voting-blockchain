@@ -14,17 +14,20 @@ class Blockchain:
         self._create_genesis_block()
     
     def _create_genesis_block(self) -> None:
-        """Create the genesis block with a default transaction."""
-        genesis_wallet = Wallet()
+        """Create the genesis block with fixed parameters."""
         genesis_block = Block()
         
-        # Create a genesis transaction (coinbase)
+        # Create a genesis transaction (coinbase) with fixed parameters
         genesis_tx = Transaction.create_coinbase(
             value=50_000,  # 50 Barbaracoins
-            recipient_script=genesis_wallet.get_address()  # Use a real wallet address
+            recipient_script="1GenesisBlockRewardAddress"  # Fixed genesis reward address
         )
+        genesis_tx.timestamp = 1577836800  # 2020-01-01 00:00:00 UTC
         genesis_block.add_transaction(genesis_tx)
-        print(f"Genesis block created with reward to address: {genesis_wallet.get_address()}")
+        genesis_block.block_header.timestamp = 1577836800  # Same timestamp as transaction
+        genesis_block.block_header.nonce = 0  # Fixed nonce
+        
+        print(f"Genesis block created with reward to address: 1GenesisBlockRewardAddress")
         
         self._add_block(genesis_block)
     

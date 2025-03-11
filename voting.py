@@ -86,7 +86,7 @@ class VoterRegistry:
     def register_voter(self, voter_id: str) -> bool:
         """Register a new voter."""
         if voter_id in self.registered_voters:
-            logging.warning(f"Voter {voter_id} is already registered")
+            logging.debug(f"Voter {voter_id} is already registered")
             return False
         self.registered_voters.add(voter_id)
         logging.info(f"Voter {voter_id} has been registered")
@@ -95,7 +95,7 @@ class VoterRegistry:
     def add_candidate(self, candidate: str) -> bool:
         """Add a new candidate to the election."""
         if candidate in self.valid_candidates:
-            logging.warning(f"Candidate {candidate} is already registered")
+            logging.debug(f"Candidate {candidate} is already registered")
             return False
         self.valid_candidates.add(candidate)
         logging.info(f"Candidate {candidate} has been added to the election")

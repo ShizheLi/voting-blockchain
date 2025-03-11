@@ -694,45 +694,61 @@ class FullNode:
 
     def broadcast_candidate_addition(self, candidate):
         """Broadcast a new candidate to all peers."""
-        message = {
-            'type': 'candidate_addition',
-            'candidate': candidate,
-            'timestamp': int(time.time())
-        }
-        self.broadcast_to_peers(json.dumps(message))
-        logging.info(f"Broadcasted candidate addition: {candidate}")
+        # 只有当候选人确实存在时才广播
+        if candidate in self.voter_registry.valid_candidates:
+            message = {
+                'type': 'candidate_addition',
+                'candidate': candidate,
+                'timestamp': int(time.time())
+            }
+            self.broadcast_to_peers(json.dumps(message))
+            logging.info(f"Broadcasted candidate addition: {candidate}")
+        else:
+            logging.debug(f"Skipped broadcasting non-existent candidate: {candidate}")
 
     def handle_candidate_addition(self, message_data):
         """Handle received candidate addition message."""
         try:
             message = json.loads(message_data)
             candidate = message['candidate']
-            if self.voter_registry.add_candidate(candidate):
-                logging.info(f"Added candidate from peer: {candidate}")
-                # Rebroadcast to other peers
-                self.broadcast_candidate_addition(candidate)
+            # 只有当候选人不存在时才添加并广播
+            if candidate not in self.voter_registry.valid_candidates:
+                if self.voter_registry.add_candidate(candidate):
+                    logging.info(f"Added candidate from peer: {candidate}")
+                    # 只有在成功添加候选人后才广播
+                    self.broadcast_candidate_addition(candidate)
+            else:
+                logging.debug(f"Ignored duplicate candidate: {candidate}")
         except Exception as e:
             logging.error(f"Error handling candidate addition: {e}")
 
     def broadcast_voter_registration(self, voter_id):
         """Broadcast a new voter registration to all peers."""
-        message = {
-            'type': 'voter_registration',
-            'voter_id': voter_id,
-            'timestamp': int(time.time())
-        }
-        self.broadcast_to_peers(json.dumps(message))
-        logging.info(f"Broadcasted voter registration: {voter_id}")
+        # 只有当选民确实已注册时才广播
+        if voter_id in self.voter_registry.registered_voters:
+            message = {
+                'type': 'voter_registration',
+                'voter_id': voter_id,
+                'timestamp': int(time.time())
+            }
+            self.broadcast_to_peers(json.dumps(message))
+            logging.info(f"Broadcasted voter registration: {voter_id}")
+        else:
+            logging.debug(f"Skipped broadcasting non-registered voter: {voter_id}")
 
     def handle_voter_registration(self, message_data):
         """Handle received voter registration message."""
         try:
             message = json.loads(message_data)
             voter_id = message['voter_id']
-            if self.voter_registry.register_voter(voter_id):
-                logging.info(f"Registered voter from peer: {voter_id}")
-                # Rebroadcast to other peers
-                self.broadcast_voter_registration(voter_id)
+            # 只有当选民不存在时才注册并广播
+            if voter_id not in self.voter_registry.registered_voters:
+                if self.voter_registry.register_voter(voter_id):
+                    logging.info(f"Registered voter from peer: {voter_id}")
+                    # 只有在成功注册选民后才广播
+                    self.broadcast_voter_registration(voter_id)
+            else:
+                logging.debug(f"Ignored duplicate voter registration: {voter_id}")
         except Exception as e:
             logging.error(f"Error handling voter registration: {e}")
 
